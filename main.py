@@ -1,8 +1,12 @@
+import secrets
+import json
 import asyncio
 import logging
 import re
 import os
 import sys
+from scrape.bing import get_bing_images
+from scrape.copilot import send_copilot_request
 from pathlib import Path
 from datetime import timedelta
 from neonize.aioze.client import NewAClient
@@ -20,12 +24,16 @@ from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import (
     InteractiveMessage,
     MessageContextInfo,
     DeviceListMetadata,
+    ButtonsMessage,
+    ExtendedTextMessage,
+    ContextInfo
 )
 from neonize.types import MessageServerID
-from neonize.utils import log, build_jid
+from neonize.utils import log, build_jid,get_message_type
 from neonize.utils.enum import ReceiptType
 import signal
-
+import urllib.parse
+import requests 
 
 sys.path.insert(0, os.getcwd())
 
@@ -43,7 +51,6 @@ signal.signal(signal.SIGINT, interrupted)
 
 
 client = NewAClient("db.sqlite3")
-
 
 @client.event(ConnectedEv)
 async def on_connected(_: NewAClient, __: ConnectedEv):
@@ -67,7 +74,7 @@ async def on_message(client: NewAClient, message: MessageEv):
 
 
 async def handler(client: NewAClient, message: MessageEv):
-    from_ = message.Info.MessageSource.Chat  # ganti nama 'from_' jadi 'from_'
+    from_ = message.Info.MessageSource.Chat 
     budy = (
         message.Message.conversation
         or getattr(message.Message, "extendedTextMessage", None) and message.Message.extendedTextMessage.text
@@ -79,6 +86,18 @@ async def handler(client: NewAClient, message: MessageEv):
     command = budy[len(prefix):].strip().split(" ")[0].lower() if isCmd else ""
     args = budy.strip().split()[1:] if isCmd else []
     text = " ".join(args)
+    isGroup = message.Info.MessageSource.IsGroup
+    isOwner = message.Info.MessageSource.Sender.User in ["6285124037519", "601164899724"]
+    # groupMetadata = await client.get_group_info(from_) if isGroup else {}
+    # participants = groupMetadata.Participants if isGroup else []
+    # participant_bot = next((p for p in participants if p.JID.User == "6285124037519"), None)
+    # participant_sender = next((p for p in groupMetadata.Participants if p.JID.User == message.Info.MessageSource.Sender.User),None)
+    # isBotAdmin = participant_bot is not None and (participant_bot.IsAdmin or participant_bot.IsSuperAdmin)
+    # isAdmin = participant_sender is not None and (participant_sender.IsAdmin or participant_sender.IsSuperAdmin)
+
+    def Example(teks):
+        return (f"*Contoh :*\n*{prefix}{command} "+ str(teks) + "*")
+        
     match command:
         case "ping":
             await client.reply_message("pong", message)
@@ -275,13 +294,77 @@ async def handler(client: NewAClient, message: MessageEv):
                 )
         case 'hi':
             await client.send_message(from_,'HALOO')
+        case 'from':
+            await client.send_message(from_,f"{from_}")
+        case 'join':
+            if not isOwner:
+                await client.reply_message("Anda bukan owner!",message)
+                return
+            if not text:
+                await client.reply_message("Link grupnya???",message)
+                return
+            await client.join_group_with_link(text)
+        
+        case "leave" | "outgc" | "out":
+            if not isOwner:
+                await client.reply_message("Anda bukan owner!",message)
+                return
+            if not isGroup:
+                await client.reply_message('Only group!',message)
+                return
+            await client.leave_group(from_)
+            
+        case "bing":
+            if not text:
+                await client.reply_message(Example("arona|5 (jumlah gambar)"),message)
+                return
+            query = text.split("|")[0]
+            count = int(text.split("|")[1])
+            if count > 15:
+                await client.reply_message("Max gambar hanya 15!",message)
+                return
+            result = get_bing_images(query,count)
+            for image in result["results"]:
+                url = image["original_url"]
+                await client.send_image(from_,url)
+                
+            await client.reply_message("Sukses",message)
+                
+        case "groupinfo":
+            info = await client.get_group_info(from_)
+            await client.send_message(from_,f"{info}")
 
-        case 'ht':
-            tags=""
-            group_info = await client.get_group_info(from_)
-            for member in group_info:
-                tags += f"@{member.JID.User}"
-            await client.send_message(from_,text,False,tags.strip())
+        case "meta":
+            if not text:
+                return await client.reply_message(Example("hai meta!"),message)
+                
+            await client.send_message(from_,Message(
+                extendedTextMessage=ExtendedTextMessage(
+                    text=text,
+                    contextInfo=ContextInfo(
+                        mentionedJID=["13135550002@s.whatsapp.net","6281239621820@s.whatsapp.net"]
+                    )
+                )
+            )
+            )
+            
+        case "copilot":
+            if not text:
+                return await client.reply_message(Example("bagaimana cara ngoding"),message)
+                
+            result = json.loads(send_copilot_request(text))
+            await client.send_message(from_,result["text"])
+            
+            
+        case "zeya":
+            if not text:
+                return await client.reply_message(Example("halo zeya!"),message)
+                
+            apiUrl = f"https://zeya.fainshe.tech/api/chat?message={urllib.parse.quote(text)}" if isGroup else f"https://zeya.fainshe.tech/api/v2/chat?message={urllib.parse.quote(text)}&sessionId={from_.User}"
+            
+            response = requests.get(apiUrl).json()
+            await client.reply_message(response["jawaban"][0]["content"]["parts"][0]["text"],message)
+
 
 
 
@@ -289,12 +372,12 @@ async def handler(client: NewAClient, message: MessageEv):
 async def PairStatusMessage(_: NewAClient, message: PairStatusEv):
     log.info(f"logged as {message.ID.User}")
 
-@client.blocking
-async def default_blocking(_: NewAClient):
-    log.debug("custom blocking function has been called.")
-    log.debug("🚧 The function is blocked, waiting for the event to be set.")
-    await event.wait()
-    log.debug("🚦 The function has been unblocked.")
+# @client.blocking
+# async def default_blocking(_: NewAClient):
+    # log.debug("custom blocking function has been called.")
+    # log.debug("🚧 The function is blocked, waiting for the event to be set.")
+    # await event.wait()
+    # log.debug("🚦 The function has been unblocked.")
 
 
 if __name__ == "__main__":

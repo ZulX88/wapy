@@ -1,1 +1,5 @@
 neonize
+beautifulsoup4
+requests
+websocket-client
+websockets
