@@ -1,5 +1,4 @@
-neonize
-beautifulsoup4
-requests
 websocket-client
-websockets
+git+https://github.com/Nubuki-all/neonize@patch-1
+requests
+beautifulsoup4
