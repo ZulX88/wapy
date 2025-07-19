@@ -6,7 +6,7 @@ pip install --break-system-packages -r requirements.txt
 # Generate Session
 Generate session with run 
 ```bash
-python3 gen_session.py
+python3 gen.py
 ```
 then input your number and link with pair code
 
