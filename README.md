@@ -2,7 +2,7 @@
 ```bash
 pip install -r requirements.txt
 ```
-
+[b]Attention! For debian based must add --break-system-packages argument
 # Generate Session
 Generate session with run 
 ```bash
