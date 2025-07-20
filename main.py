@@ -2,11 +2,15 @@ import asyncio
 import logging
 import os
 import re
+import string
+import random
 import sys
+import requests 
 import json
+from urllib.parse import quote, urlparse
 from datetime import timedelta
-from neonize.aioze.client import NewAClient, ClientFactory
-from neonize.aioze.events import ConnectedEv, MessageEv, PairStatusEv, ReceiptEv, CallOfferEv, event
+from neonize.aioze.client import NewAClient, ClientFactory,ContactStore
+from neonize.aioze.events import ConnectedEv, MessageEv, PairStatusEv, ReceiptEv, CallOfferEv, event, GroupInfoEv
 from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import (
     Message,
     FutureProofMessage,
@@ -15,7 +19,7 @@ from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import (
     DeviceListMetadata,
 )
 from neonize.types import MessageServerID
-from neonize.utils import log, build_jid
+from neonize.utils import log, build_jid,get_message_type 
 from neonize.utils.enum import ReceiptType, VoteType
 from scrape.copilot import send_copilot_request 
 from scrape.zerochan import zerochan
@@ -51,7 +55,33 @@ async def on_receipt(_: NewAClient, receipt: ReceiptEv):
 async def on_call(_: NewAClient, call: CallOfferEv):
     log.debug(call)
 
+@client.event(GroupInfoEv)
+async def greetz(client: NewAClient, greet: GroupInfoEv):
+    user = (
+        greet.Join[0].User if greet.Join
+        else greet.Leave[0].User if greet.Leave
+        else greet.Promote[0].User if greet.Promote
+        else greet.Demote[0].User if greet.Demote
+        else None
+    )    
+    if greet.Leave:
+        if greet.Sender.User == user:
+            return await client.send_message(greet.JID,f"Good bye @{user} 🥀")
+        else:
+            return await client.send_message(greet.JID,f"Stupid nigga got kicked @{user} 🤓")
+    elif greet.Join:
+        return await client.send_message(greet.JID, f"Welcome @{user}! 🌹")
+    elif greet.Promote:
+        return await client.send_message(greet.JID, f"Congrats! @{user} has been promoted to admin by @{greet.Sender.User} 🥳")
+    elif greet.Demote:
+        return await client.send_message(greet.JID, f"Oops! @{user} has been demoted from admin by @{greet.Sender.User} 🤐")
+    elif greet.Announce:        
+        if greet.Announce.IsAnnounce == True:
+            return await client.send_message(greet.JID ,"🔒 This group has been closed. Only admins can send messages now." )
+        elif greet.Announce.IsAnnounce == False:
+            return await client.send_message(greet.JID ,"🔓 This group has been opened. Everyone can send messages now." )
 
+            
 @client.event(MessageEv)
 async def on_message(client: NewAClient, message: MessageEv):
     await handler(client, message)
@@ -90,6 +120,44 @@ async def handler(client: NewAClient, message: MessageEv):
         return f"*Contoh* : {prefix}{command} " + str(teks)
     
     match command:
+        case "tagall":
+            tekto = ""
+            for participants in groupMetadata.Participants:
+                user = participants.JID.User
+                tekto += f"@{user} \n"
+            await client.send_message(from_,tekto)
+        case "mtype":
+            typek = get_message_type(message)
+            await client.reply_message(str(typek),message)
+        case "tt" | "tiktok":
+            if not text:
+                return await client.reply_message("Masukkan link video/foto TikTok", message)
+            
+            try:
+                parsed = urlparse(text)
+                if not all([parsed.scheme, parsed.netloc]):
+                    return await client.reply_message("URL tidak valid", message)
+                    
+                # Encode URL untuk request API
+                encoded_url = quote(text, safe='')
+                api_url = f"https://tikwm.com/api/?hd=1&url={encoded_url}"
+                
+                response = requests.get(api_url, timeout=10).json()
+                
+                if not response.get("data"):
+                    return await client.reply_message("Gagal memproses video", message)
+                    
+                data = response["data"]
+                
+                if data.get("images"):
+                    for image_url in data["images"]:
+                        return await client.send_image(from_, str(image_url))                     
+                await client.send_video(from_, await client.build_video_message(data["play"]))
+                    
+            except requests.exceptions.RequestException:
+                await client.reply_message("Error saat menghubungi server", message)
+            except ValueError:
+                await client.reply_message("Response tidak valid", message)
         case "zero":
             if not text:
                 return await client.reply_message(Example("shiroko"),message)
