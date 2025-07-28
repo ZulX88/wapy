@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import config
 import re
 import string
 import random
@@ -20,7 +21,7 @@ from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import (
 )
 from neonize.types import MessageServerID
 from neonize.utils import log, build_jid,get_message_type 
-from neonize.utils.enum import ReceiptType, VoteType
+from neonize.utils.enum import ReceiptType, VoteType,ParticipantChange
 from scrape.copilot import send_copilot_request 
 from scrape.zerochan import zerochan
 import signal
@@ -38,13 +39,12 @@ log.setLevel(logging.NOTSET)
 signal.signal(signal.SIGINT, interrupted)
 
 
-client = NewAClient("db.sqlite3")
+client = NewAClient(config.namedb)
 
 
 @client.event(ConnectedEv)
 async def on_connected(_: NewAClient, __: ConnectedEv):
     log.info("⚡ Connected")
-
 
 @client.event(ReceiptEv)
 async def on_receipt(_: NewAClient, receipt: ReceiptEv):
@@ -74,13 +74,7 @@ async def greetz(client: NewAClient, greet: GroupInfoEv):
     elif greet.Promote:
         return await client.send_message(greet.JID, f"Congrats! @{user} has been promoted to admin by @{greet.Sender.User} 🥳")
     elif greet.Demote:
-        return await client.send_message(greet.JID, f"Oops! @{user} has been demoted from admin by @{greet.Sender.User} 🤐")
-    elif greet.Announce:        
-        if greet.Announce.IsAnnounce == True:
-            return await client.send_message(greet.JID ,"🔒 This group has been closed. Only admins can send messages now." )
-        elif greet.Announce.IsAnnounce == False:
-            return await client.send_message(greet.JID ,"🔓 This group has been opened. Everyone can send messages now." )
-
+        return await client.send_message(greet.JID, f"Oops! @{user} has been demoted from admin by @{greet.Sender.User} 🤐")    
             
 @client.event(MessageEv)
 async def on_message(client: NewAClient, message: MessageEv):
@@ -97,13 +91,17 @@ async def handler(client: NewAClient, message: MessageEv):
     prefix_match = re.match(r"^[°•π÷×¶∆£¢€¥®™✓_=|~!?#$%^&.+\-,/\\©^]", budy)
     prefix = prefix_match.group() if prefix_match else "!"
     isCmd = budy.startswith(prefix)
-    command = budy[len(prefix):].strip().split(" ")[0].lower() if isCmd else ""
-    args = budy.strip().split()[1:] if isCmd else []
-    text = " ".join(args)
+    command = ""
+    text = ""
+    if isCmd:
+        parts = budy[len(prefix):].strip().split(" ", 1)
+        command = parts[0].lower()
+        if len(parts) > 1:
+            text = parts[1]
     sender = message.Info.MessageSource.Sender
-    groupMetadata = await client.get_group_info(from_)
     isGroup = message.Info.MessageSource.IsGroup
-    isOwner = sender.User in ["6285124037519", "601164899724"]
+    groupMetadata = await client.get_group_info(from_) if isGroup else None    
+    isOwner = sender.User in config.owner
     isAdmin = False
     isBotAdmin = False
     
@@ -111,7 +109,7 @@ async def handler(client: NewAClient, message: MessageEv):
         for participant in groupMetadata.Participants:  
             if participant.JID.User == sender.User and (participant.IsAdmin or participant.IsSuperAdmin):
                 isAdmin = True
-            if participant.JID.User == "6285124037519" and (participant.IsAdmin or participant.IsSuperAdmin):
+            if participant.JID.User == config.bot_number and (participant.IsAdmin or participant.IsSuperAdmin):
                 isBotAdmin = True
             if isAdmin and isBotAdmin:
                 break
@@ -119,13 +117,16 @@ async def handler(client: NewAClient, message: MessageEv):
     def Example(teks):
         return f"*Contoh* : {prefix}{command} " + str(teks)
     
-    match command:
-        case "tagall":
-            tekto = ""
-            for participants in groupMetadata.Participants:
-                user = participants.JID.User
-                tekto += f"@{user} \n"
-            await client.send_message(from_,tekto)
+    match command: 
+        case "hidetag": 
+            if not isAdmin and not isOwner:
+                return await client.reply_message("Only admin!",message)
+            if not text:
+                return await client.reply_message(Example("teks"),message)
+            tagged = ""
+            for user in groupMetadata.Participants:
+                tagged += f"@{user.JID.User} "
+            await client.send_message(from_,message=str(text),ghost_mentions=tagged)
         case "mtype":
             typek = get_message_type(message)
             await client.reply_message(str(typek),message)
@@ -471,6 +472,16 @@ async def default_blocking(client: NewAClient, code: str, connected: bool = True
         log.info("Pair code: %s", code)
 
 
+ # Pastikan ini diimpor jika belum
+
+# Asumsi: 'client' objek Anda sudah didefinisikan di tempat lain
+# dan memiliki metode async 'connect()' dan 'idle()'.
+
+async def connect():
+    await client.connect()
+    # Do something else
+    await client.idle()  # Necessary to keep receiving events
+
+
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(client.connect())
+    client.loop.run_until_complete(connect())
